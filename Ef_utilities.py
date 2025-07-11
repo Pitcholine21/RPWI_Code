@@ -1,6 +1,10 @@
 import struct
 import numpy as np
+import datetime as dt
+import spiceypy as spice
 from scipy.signal import butter, filtfilt
+
+R_E = 6371.2  # Earth radius in km
 
 def filter_out_start_config_noise(data, epoch, removal_width = 32, new_config_delay = 0.1):
     # Create a mask for the data
@@ -98,6 +102,24 @@ def find_factor(list1, list2):
     mean2 = np.nanmean(np.abs(list2 - np.nanmean(list2)))
     factor = mean2 / mean1
     return factor
+
+def convert_1970(epochs):
+    datetimes = []
+    for epoch in epochs:
+        datetimes.append(dt.datetime(1970, 1, 1) + dt.timedelta(days=epoch))
+    return datetimes
+
+def get_JUICE_distance(epochs):
+    dist_list = []
+    for epoch in epochs:
+        # Get the distance from JUICE to Earth in Earth radii
+        et = spice.datetime2et(epoch)
+        pos, _ = spice.spkpos('JUICE', et, 'GSM', 'NONE', 'EARTH')
+        pos = np.array(pos)
+        pos_norm = np.linalg.norm(pos)
+        pos_norm_earth_radii = pos_norm / R_E
+        dist_list.append(float(pos_norm_earth_radii))
+    return dist_list
 
 # Rotation matrix to go from JMAG OBS frame to JUICE frame
 R_JMAG = np.array([
