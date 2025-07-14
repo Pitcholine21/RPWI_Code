@@ -1,4 +1,5 @@
 import struct
+import cdflib
 import numpy as np
 import datetime as dt
 import spiceypy as spice
@@ -82,14 +83,14 @@ def extract_double_from_columns(data, col_start, col_end):
     bin_strs = [''.join(f'{byte:08b}' for byte in row) for row in bytes_slice]
     return convert_binstr_to_double_precision(bin_strs)
 
-# Magnetopause (Shue et al. 1997)
+# Magnetopause model (Shue et al. 1997)
 def magnetopause(P_sw, theta):
     R0 = 10.22 * (P_sw / 1.0)**(-1/6)  # subsolar point in Earth radii
     alpha = 0.5  # typical value
     r = R0 * (2 / (1 + np.cos(theta)))**alpha
     return r
 
-# Bow Shock (Farris & Russell 1994)
+# Bow Shock model (Farris & Russell 1994)
 def bow_shock(P_sw, theta):
     R0 = 14.5 * (P_sw / 1.0)**(-1/6)  # subsolar point in Earth radii
     epsilon = 0.8  # shape parameter
@@ -120,6 +121,24 @@ def get_JUICE_distance(epochs):
         pos_norm_earth_radii = pos_norm / R_E
         dist_list.append(float(pos_norm_earth_radii))
     return dist_list
+
+def print_info(cdf):
+
+    for key, value in cdf.globalattsget().items():
+        print(f"Global attribute: {key} = {value}")
+
+    for variable in cdf.cdf_info().zVariables:
+        print()
+        print(f"Variable: {variable}")
+        print(f"Shape: {cdf.varget(variable).shape}")
+        print(f"Data type: {cdf.varinq(variable).Data_Type_Description}")
+        for key, value in cdf.varattsget(variable).items():
+            print(f"Variable attribute: {key} = {value}")
+
+def print_entire(array):
+    for i in range(len(array)):
+        print(f"Index {i}: {array[i]}")
+    return
 
 # Rotation matrix to go from JMAG OBS frame to JUICE frame
 R_JMAG = np.array([
