@@ -3,15 +3,10 @@ import numpy as np
 import datetime as dt
 import spiceypy as spice
 import Ef_utilities as Ef
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 from multiprocessing import Pool
 
 def exponential(t, carac_time):
     return np.exp(-(t / carac_time)**2)
-
-def box(t, carac_time):
-    return 1
 
 def correct_for_spacecraft_charge(U123, U4, epochs, carac_time, weight_function=exponential):
     # carac_time is the characteristic time of the exponential in seconds
@@ -19,7 +14,7 @@ def correct_for_spacecraft_charge(U123, U4, epochs, carac_time, weight_function=
 
     nb_epochs = len(epochs)
 
-    U123_corrected = np.zeros(nb_epochs)
+    correction_list = np.zeros(nb_epochs)
 
     start_time = dt.datetime.now()
 
@@ -50,9 +45,9 @@ def correct_for_spacecraft_charge(U123, U4, epochs, carac_time, weight_function=
                 mean_numerator += (U4[j] - U123[j]) * weight   
                 mean_denominator += weight
         if mean_denominator != 0:
-            U123_corrected[i] = U123[i] + mean_numerator / mean_denominator
+            correction_list[i] = mean_numerator / mean_denominator
         else:
-            U123_corrected[i] = U123[i]
+            correction_list[i] = 0
 
     """
     plt.figure(figsize=(12, 6))
@@ -104,7 +99,7 @@ def correct_for_spacecraft_charge(U123, U4, epochs, carac_time, weight_function=
     plt.grid()
     """
 
-    return U123_corrected
+    return correction_list
 
 def worker(U123, U4, epochs, carac_time, weight_function, i):
     if i%100 == 0:
@@ -128,7 +123,7 @@ def worker(U123, U4, epochs, carac_time, weight_function, i):
             weight = weight_function(time_delta, carac_time)
             mean_numerator += (U4[j] - U123[j]) * weight   
             mean_denominator += weight
-    return i, U123[i] + mean_numerator / mean_denominator if mean_denominator != 0 else U123[i]
+    return i, mean_numerator / mean_denominator if mean_denominator != 0 else 0
 
 def correct_for_spacecraft_charge_parallel(U123, U4, epochs, carac_time, weight_function=exponential):
     # carac_time is the characteristic time of the exponential in seconds
@@ -139,39 +134,27 @@ def correct_for_spacecraft_charge_parallel(U123, U4, epochs, carac_time, weight_
     with Pool(processes=4) as pool:
         results = pool.starmap(worker, args)
     # Unzip the results
-    indices, corrected_values = zip(*results)
+    indices, corrections = zip(*results)
     # Create the corrected array
-    U123_corrected = np.zeros(len(epochs))
-    U123_corrected[list(indices)] = corrected_values
+    correction_list = np.zeros(len(epochs))
+    correction_list[list(indices)] = corrections
 
-    return U123_corrected
+    return correction_list
 
 def main():
 
     print("Running E-field plasma LP correction script")
+    start = dt.datetime.now()
 
     spice.furnsh("SPICE/JUICE/kernels/mk/juice_ops.tm")
     spice.furnsh("SPICE/gsm_frame.tf")
 
-    plt.rcParams['legend.frameon'] = False
-    plt.rcParams['legend.labelcolor'] = 'linecolor'
-    plt.rcParams['legend.fontsize'] = 14
-    plt.rcParams['font.family'] = 'Serif'
-    plt.ion()
-
-    R_E = 6371  # Earth radius
-
     carac_time = 300
-    downsample_factor = 200
-    weight_function_used = "Exponential"
+    downsample_factor = 50
     w_func = exponential
 
     start_time = dt.datetime(2024, 8, 20, 12, 0, 0)
-    end_time = dt.datetime(2024, 8, 21, 12, 15, 0)
-
-    start = dt.datetime.now()
-
-    # Get cdfs and JUICE state vectors
+    end_time = dt.datetime(2024, 8, 21, 12, 0, 0)
 
     cdfs = []
 
@@ -232,36 +215,18 @@ def main():
     start_idx = np.searchsorted(lp_epochs, start_time)
     end_idx = np.searchsorted(lp_epochs, end_time)
 
-    U12 = U12[start_idx:end_idx:downsample_factor]
-    U23 = U23[start_idx:end_idx:downsample_factor]
-    U34 = U34[start_idx:end_idx:downsample_factor]
+    U12uncal = U12[start_idx:end_idx:downsample_factor]
+    U23uncal = U23[start_idx:end_idx:downsample_factor]
+    U34uncal = U34[start_idx:end_idx:downsample_factor]
     U40 = U40[start_idx:end_idx:downsample_factor]
     lp_epochs = lp_epochs[start_idx:end_idx:downsample_factor]
 
     print("Downsampled and truncated LP data")
 
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(lp_epochs, U12, label='U12 (uncalibrated)')
-    ax.plot(lp_epochs, U23, label='U23 (uncalibrated)')
-    ax.plot(lp_epochs, U34, label='U34 (uncalibrated)')
-    ax.plot(lp_epochs, U40, label='U40 (uncalibrated)')
-    ax.set_title(f"Downsample factor: {downsample_factor}")
-    ax.set_xlabel('Epoch \n Distance (R$_E$)')
-    ax.xaxis.set_label_coords(-0.04, -0.02)
-    ticks = ax.get_xticks()
-    ticks = Ef.convert_1970(ticks)
-    distances = Ef.get_JUICE_distance(ticks)
-    for tick, dist in zip(ticks, distances):
-        ax.annotate(f"{dist:.1f}", xy=(tick, ax.get_ylim()[0]), xycoords=('data', 'data'),
-                    xytext=(0, -20), textcoords='offset points',
-                    ha='center', va='top', fontsize=10, rotation=0)
-    ax.set_ylabel('Voltage difference (V)')
-    ax.legend()
-    ax.grid()
-
-    U1, U2, U3, U4 = Ef.multiply_lists_by_44matrix(U12, U23, U34, U40, Ef.diff2volt)
+    U1uncal, U2uncal, U3uncal, U4 = Ef.multiply_lists_by_44matrix(U12uncal, U23uncal, U34uncal, U40, Ef.diff2volt)
 
     """
+    # Uncomment this section to plot the uncalibrated potentials and the weight function
     # Plot U1 and U4 over the entire time period
     center_time = dt.datetime(2024, 8, 20, 22, 0, 0)
     # Prepare exponential weights centered at center_time
@@ -294,200 +259,88 @@ def main():
 
     print("Got single probe potentials")
 
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(lp_epochs, U1, label='U1 (uncalibrated)')
-    ax.plot(lp_epochs, U2, label='U2 (uncalibrated)')
-    ax.plot(lp_epochs, U3, label='U3 (uncalibrated)')
-    ax.plot(lp_epochs, U4, label='U4 (uncalibrated)')
-    ax.set_title(f"Caracteristic time: {carac_time} seconds, downsample factor: {downsample_factor}")
-    ax.set_xlabel('Epoch \n Distance (R$_E$)')
-    ax.xaxis.set_label_coords(-0.04, -0.02)
-    ticks = ax.get_xticks()
-    ticks = Ef.convert_1970(ticks)
-    distances = Ef.get_JUICE_distance(ticks)
-    for tick, dist in zip(ticks, distances):
-        ax.annotate(f"{dist:.1f}", xy=(tick, ax.get_ylim()[0]), xycoords=('data', 'data'),
-                    xytext=(0, -20), textcoords='offset points',
-                    ha='center', va='top', fontsize=10, rotation=0)
-    ax.set_ylabel('Voltage (V)')
-    ax.legend()
-    ax.grid()
+    mean_diff_U1 = np.nanmean(np.array(U4) - np.array(U1uncal))
+    mean_diff_U2 = np.nanmean(np.array(U4) - np.array(U2uncal))
+    mean_diff_U3 = np.nanmean(np.array(U4) - np.array(U3uncal))
 
-    mean_diff_U1 = np.nanmean(np.array(U4) - np.array(U1))
-    mean_diff_U2 = np.nanmean(np.array(U4) - np.array(U2))
-    mean_diff_U3 = np.nanmean(np.array(U4) - np.array(U3))
+    U1regcal = np.array([float(u) + float(mean_diff_U1) for u in U1uncal])
+    U2regcal = np.array([float(u) + float(mean_diff_U2) for u in U2uncal])
+    U3regcal = np.array([float(u) + float(mean_diff_U3) for u in U3uncal])
 
-    U1reg = np.array([float(u) + float(mean_diff_U1) for u in U1])
-    U2reg = np.array([float(u) + float(mean_diff_U2) for u in U2])
-    U3reg = np.array([float(u) + float(mean_diff_U3) for u in U3])
+    print("Did regular calibration")
 
+    corrections1 = correct_for_spacecraft_charge_parallel(U1uncal, U4, lp_epochs, carac_time, weight_function=w_func)
+    corrections2 = correct_for_spacecraft_charge_parallel(U2uncal, U4, lp_epochs, carac_time, weight_function=w_func)
+    corrections3 = correct_for_spacecraft_charge_parallel(U3uncal, U4, lp_epochs, carac_time, weight_function=w_func)
 
-    U1 = correct_for_spacecraft_charge_parallel(U1, U4, lp_epochs, carac_time, weight_function=w_func)
-    U2 = correct_for_spacecraft_charge_parallel(U2, U4, lp_epochs, carac_time, weight_function=w_func)
-    U3 = correct_for_spacecraft_charge_parallel(U3, U4, lp_epochs, carac_time, weight_function=w_func)
+    U1cal = U1uncal + corrections1
+    U2cal = U2uncal + corrections2
+    U3cal = U3uncal + corrections3
 
-    print("Corrected for spacecraft charge")
+    print("Did new calibration")
 
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(lp_epochs, U1, label='U1 (sliding cal)')
-    ax.plot(lp_epochs, U2, label='U2 (sliding cal)')
-    ax.plot(lp_epochs, U3, label='U3 (sliding cal)')
-    ax.plot(lp_epochs, U4, label='U4 (sliding cal)')
-    ax.set_title(f"Caracteristic time: {carac_time} seconds, downsample factor: {downsample_factor}, weight function: {weight_function_used}")
-    ax.set_xlabel('Epoch \n Distance (R$_E$)')
-    ax.xaxis.set_label_coords(-0.04, -0.02)
-    ticks = ax.get_xticks()
-    ticks = Ef.convert_1970(ticks)
-    distances = Ef.get_JUICE_distance(ticks)
-    for tick, dist in zip(ticks, distances):
-        ax.annotate(f"{dist:.1f}", xy=(tick, ax.get_ylim()[0]), xycoords=('data', 'data'),
-                    xytext=(0, -20), textcoords='offset points',
-                    ha='center', va='top', fontsize=10, rotation=0)
-    ax.set_ylabel('Voltage (V)')
-    ax.legend()
-    ax.grid()
-
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(lp_epochs, U1reg, label='U1 (regular cal)')
-    ax.plot(lp_epochs, U2reg, label='U2 (regular cal)')
-    ax.plot(lp_epochs, U3reg, label='U3 (regular cal)')
-    ax.plot(lp_epochs, U4, label='U4 (regular cal)')
-    ax.set_title(f"Downsample factor: {downsample_factor}")
-    ax.set_xlabel('Epoch \n Distance (R$_E$)')
-    ax.xaxis.set_label_coords(-0.04, -0.02)
-    ticks = ax.get_xticks()
-    ticks = Ef.convert_1970(ticks)
-    distances = Ef.get_JUICE_distance(ticks)
-    for tick, dist in zip(ticks, distances):
-        ax.annotate(f"{dist:.1f}", xy=(tick, ax.get_ylim()[0]), xycoords=('data', 'data'),
-                    xytext=(0, -20), textcoords='offset points',
-                    ha='center', va='top', fontsize=10, rotation=0)
-    ax.set_ylabel('Voltage (V)')
-    ax.legend()
-    ax.grid()
-
-    U12, U23, U34, U40 = Ef.multiply_lists_by_44matrix(U1, U2, U3, U4, Ef.volt2diff)
-    U12reg, U23reg, U34reg, U40reg = Ef.multiply_lists_by_44matrix(U1reg, U2reg, U3reg, U4, Ef.volt2diff)
+    U12cal, U23cal, U34cal, U40 = Ef.multiply_lists_by_44matrix(U1cal, U2cal, U3cal, U4, Ef.volt2diff)
+    U12regcal, U23regcal, U34regcal, U40reg = Ef.multiply_lists_by_44matrix(U1regcal, U2regcal, U3regcal, U4, Ef.volt2diff)
 
     print("Went back to differentials")
 
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(lp_epochs, U12, label='U12 (sliding cal)')
-    ax.plot(lp_epochs, U23, label='U23 (sliding cal)')
-    ax.plot(lp_epochs, U34, label='U34 (sliding cal)')
-    ax.plot(lp_epochs, U40, label='U40 (sliding cal)')
-    ax.set_title(f"Caracteristic time: {carac_time} seconds, downsample factor: {downsample_factor}, weight function: {weight_function_used}")
-    ax.set_xlabel('Epoch \n Distance (R$_E$)')
-    ax.xaxis.set_label_coords(-0.04, -0.02)
-    ticks = ax.get_xticks()
-    ticks = Ef.convert_1970(ticks)
-    distances = Ef.get_JUICE_distance(ticks)
-    for tick, dist in zip(ticks, distances):
-        ax.annotate(f"{dist:.1f}", xy=(tick, ax.get_ylim()[0]), xycoords=('data', 'data'),
-                    xytext=(0, -20), textcoords='offset points',
-                    ha='center', va='top', fontsize=10, rotation=0)
-    ax.set_ylabel('Voltage difference (V)')
-    ax.legend()
-    ax.grid()
-
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(lp_epochs, U12reg, label='U12 (regular cal)')
-    ax.plot(lp_epochs, U23reg, label='U23 (regular cal)')
-    ax.plot(lp_epochs, U34reg, label='U34 (regular cal)')
-    ax.plot(lp_epochs, U40reg, label='U40 (regular cal)')
-    ax.set_title(f"Downsample factor: {downsample_factor}")
-    ax.set_xlabel('Epoch \n Distance (R$_E$)')
-    ax.xaxis.set_label_coords(-0.04, -0.02)
-    ticks = ax.get_xticks()
-    ticks = Ef.convert_1970(ticks)
-    distances = Ef.get_JUICE_distance(ticks)
-    for tick, dist in zip(ticks, distances):
-        ax.annotate(f"{dist:.1f}", xy=(tick, ax.get_ylim()[0]), xycoords=('data', 'data'),
-                    xytext=(0, -20), textcoords='offset points',
-                    ha='center', va='top', fontsize=10, rotation=0)
-    ax.set_ylabel('Voltage difference (V)')
-    ax.legend()
-    ax.grid()
-
-    Ex, Ey, Ez = Ef.multiply_lists_by_33matrix(U12, U23, U34, Ef.volt2E)
-    Emag = np.sqrt(Ex**2 + Ey**2 + Ez**2)
-    Exreg, Eyreg, Ezreg = Ef.multiply_lists_by_33matrix(U12reg, U23reg, U34reg, Ef.volt2E)
-    Emagreg = np.sqrt(Exreg**2 + Eyreg**2 + Ezreg**2)
+    Ex, Ey, Ez = Ef.multiply_lists_by_33matrix(U12cal, U23cal, U34cal, Ef.volt2E)
+    Exreg, Eyreg, Ezreg = Ef.multiply_lists_by_33matrix(U12regcal, U23regcal, U34regcal, Ef.volt2E)
 
     print("Got E field")
 
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(lp_epochs, Ex*1e3, label='Ex (sliding cal)', lw=1.1)
-    ax.plot(lp_epochs, Ey*1e3, label='Ey (sliding cal)', lw=1.1)
-    ax.plot(lp_epochs, Ez*1e3, label='Ez (sliding cal)', lw=1.1)
-    ax.plot(lp_epochs, Emag*1e3, label='|E| (sliding cal)', color = 'red', lw=1.1)
-    ax.set_title(f"Caracteristic time: {carac_time} seconds, downsample factor: {downsample_factor}, weight function: {weight_function_used}")
-    ax.set_xlabel('Epoch \n Distance (R$_E$)')
-    ax.xaxis.set_label_coords(-0.04, -0.02)
-    ticks = ax.get_xticks()
-    ticks = Ef.convert_1970(ticks)
-    distances = Ef.get_JUICE_distance(ticks)
-    for tick, dist in zip(ticks, distances):
-        ax.annotate(f"{dist:.1f}", xy=(tick, ax.get_ylim()[0]), xycoords=('data', 'data'),
-                    xytext=(0, -20), textcoords='offset points',
-                    ha='center', va='top', fontsize=10, rotation=0)
-    ax.set_ylabel('Electric Field (mV/m)')
-    ax.legend()
-    ax.grid()
-
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(lp_epochs, Exreg*1e3, label='Ex (regular cal)', lw=1.1)
-    ax.plot(lp_epochs, Eyreg*1e3, label='Ey (regular cal)', lw=1.1)
-    ax.plot(lp_epochs, Ezreg*1e3, label='Ez (regular cal)', lw=1.1)
-    ax.plot(lp_epochs, Emagreg*1e3, label='|E| (regular cal)', color = 'red', lw=1.1)
-    ax.set_title(f"Downsample factor: {downsample_factor}")
-    ax.set_xlabel('Epoch \n Distance (R$_E$)')
-    ax.xaxis.set_label_coords(-0.04, -0.02)
-    ticks = ax.get_xticks()
-    ticks = Ef.convert_1970(ticks)
-    distances = Ef.get_JUICE_distance(ticks)
-    for tick, dist in zip(ticks, distances):
-        ax.annotate(f"{dist:.1f}", xy=(tick, ax.get_ylim()[0]), xycoords=('data', 'data'),
-                    xytext=(0, -20), textcoords='offset points',
-                    ha='center', va='top', fontsize=10, rotation=0)
-    ax.set_ylabel('Electric Field (mV/m)')
-    ax.legend()
-    ax.grid()
-
-    # Write E-field data to a txt file with relevant info in the filename
+    # Write data to a txt file with relevant info in the filename
     output_filename = (
         f"Efield_{start_time.strftime('%Y%m%dT%H%M%S')}_"
         f"{end_time.strftime('%Y%m%dT%H%M%S')}_"
         f"downsample{downsample_factor}_"
-        f"caractime{carac_time}_"
-        f"{weight_function_used}.txt"
+        f"caractime{carac_time}.txt"
     )
 
     print(f"Writing E-field data to {output_filename}")
 
     header = (
         "Epoch\t"
-        "Ex(sliding)\tEy(sliding)\tEz(sliding)\tEmag(sliding)\t"
-        "Ex(regular)\tEy(regular)\tEz(regular)\tEmag(regular)\n"
+        "U40\t"
+        "U12uncal\tU23uncal\tU34uncal\t"
+        "U1uncal\tU2uncal\tU3uncal\t"
+        "Corrections1\tCorrections2\tCorrections3\t"
+        "U1regcal\tU2regcal\tU3regcal\t"
+        "U1cal\tU2cal\tU3cal\t"
+        "U12regcal\tU23regcal\tU34regcal\t"
+        "U12cal\tU23cal\tU34cal\t"
+        "Ex\tEy\tEz\t"
+        "Exreg\tEyreg\tEzreg\n"
     )
 
-    with open(output_filename, "w") as f:
+    # Set output directory (change this as needed)
+    output_dir = "Olivier_RPWI/Plasmasphere_data_files/LP/"
+    output_path = output_dir + output_filename
+
+    with open(output_path, "w") as f:
         f.write(header)
         for i in range(len(lp_epochs)):
             line = (
-                f"{lp_epochs[i]}\t"
-                f"{Ex[i]:.6e}\t{Ey[i]:.6e}\t{Ez[i]:.6e}\t{Emag[i]:.6e}\t"
-                f"{Exreg[i]:.6e}\t{Eyreg[i]:.6e}\t{Ezreg[i]:.6e}\t{Emagreg[i]:.6e}\n"
+                f"{lp_epochs[i]}"
+                f"\t{U40[i]:.6f}"
+                f"\t{U12uncal[i]:.6f}\t{U23uncal[i]:.6f}\t{U34uncal[i]:.6f}"
+                f"\t{U1uncal[i]:.6f}\t{U2uncal[i]:.6f}\t{U3uncal[i]:.6f}"
+                f"\t{corrections1[i]:.6f}\t{corrections2[i]:.6f}\t{corrections3[i]:.6f}"
+                f"\t{U1regcal[i]:.6f}\t{U2regcal[i]:.6f}\t{U3regcal[i]:.6f}"
+                f"\t{U1cal[i]:.6f}\t{U2cal[i]:.6f}\t{U3cal[i]:.6f}"
+                f"\t{U12regcal[i]:.6f}\t{U23regcal[i]:.6f}\t{U34regcal[i]:.6f}"
+                f"\t{U12cal[i]:.6f}\t{U23cal[i]:.6f}\t{U34cal[i]:.6f}"
+                f"\t{Ex[i]:.6f}\t{Ey[i]:.6f}\t{Ez[i]:.6f}"
+                f"\t{Exreg[i]:.6f}\t{Eyreg[i]:.6f}\t{Ezreg[i]:.6f}\n"
             )
             f.write(line)
+
+    print("Wrote into data file")
 
     spice.kclear()
 
     print("Finished")
     print(f"Running time : {(dt.datetime.now()-start).total_seconds()} seconds")
-    plt.show(block = False)  # Show the plot without blocking the script
-    input("Press Enter to exit...")  # Keep the plot window open until user closes it
-    plt.close('all')  # Close all plot windows after user input
 
 if __name__ == "__main__":
     main()

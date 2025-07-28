@@ -4,22 +4,17 @@ import datetime as dt
 import spiceypy as spice
 import matplotlib.pyplot as plt
 from geopack import geopack
-from matplotlib import cm
-from matplotlib.colors import Normalize
-from scipy.interpolate import interp1d
 from Ef_utilities import *
-
-R_E = 6371  # Earth radius
-
-plt.rcParams['legend.frameon'] = False
-plt.rcParams['legend.labelcolor'] = 'linecolor'
-plt.rcParams['legend.fontsize'] = 11
-plt.rcParams['font.family'] = 'Serif'
 
 # Get current time in UTC
 start = dt.datetime.now()
 
-# Get cdfs and JUICE state vectors
+spice.furnsh("SPICE/JUICE/kernels/mk/juice_ops.tm")
+spice.furnsh("SPICE/gsm_frame.tf")
+
+R_E = 6371  # Earth radius
+
+downsample_factor = 100
 
 cdfs = []
 
@@ -33,13 +28,6 @@ cdfs.append(cdflib.CDF('DATA/JUICE_L1a_RPWI-LP-SID1_RICH_DE763_SNAP_20240820T220
 cdfs.append(cdflib.CDF('DATA/JUICE_L1a_RPWI-LP-SID1_RICH_DE763_SNAP_20240820T223650_V03.cdf'))
 cdfs.append(cdflib.CDF('DATA/JUICE_L1a_RPWI-LP-SID1_RICH_DE763_SNAP_20240820T231519_V03.cdf'))
 cdfs.append(cdflib.CDF('DATA/JUICE_L1a_RPWI-LP-SID1_RICH_DE763_SNAP_20240820T235531_V03.cdf'))
-
-# Getting JUICE state vectors
-
-spice.furnsh("SPICE/JUICE/kernels/mk/juice_ops.tm")
-spice.furnsh("SPICE/gsm_frame.tf")
-
-downsample_factor = 300  # Downsample factor for epochs
 
 lp_epochs = np.array([])
 
@@ -74,27 +62,6 @@ for i, epoch in enumerate(lp_epochs[::downsample_factor]):
     By.append(by)
     Bz.append(bz)
 
-Bmag = np.sqrt(np.array(Bx)**2 + np.array(By)**2 + np.array(Bz)**2)
-
-fig, ax = plt.subplots(figsize=(10, 5))
-ax.plot(lp_epochs[::downsample_factor], Bx, label='Bx')
-ax.plot(lp_epochs[::downsample_factor], By, label='By')
-ax.plot(lp_epochs[::downsample_factor], Bz, label='Bz')
-ax.plot(lp_epochs[::downsample_factor], Bmag, label='|B|')
-ax.set_xlabel('Epoch \n Distance (R$_E$)')
-ax.xaxis.set_label_coords(-0.06, -0.025)
-ticks = ax.get_xticks()
-ticks = convert_1970(ticks)
-distances = get_JUICE_distance(ticks)
-for tick, dist in zip(ticks, distances):
-    ax.annotate(f"{dist:.1f}", xy=(tick, ax.get_ylim()[0]), xycoords=('data', 'data'),
-                xytext=(0, -20), textcoords='offset points',
-                ha='center', va='top', fontsize=10, rotation=0)
-ax.set_ylabel('Magnetic Field (nT)')
-ax.set_title('Magnetic Field Components at JUICE in GSM frame')
-ax.legend()
-ax.grid()
-
 # Get corotation speed in GSM frame
 omega_earth = 7.2921159e-5  # Earth's rotation rate in rad/s
 
@@ -117,68 +84,38 @@ for i in range(len(lp_epochs[::downsample_factor])):
     print(f"Calculating -v x B for epoch {i+1}/{len(lp_epochs[::downsample_factor])}: {lp_epochs[::downsample_factor][i].isoformat()}")
     v_x_B[i] = -np.cross(plasma_rel_speed[i], [Bx[i], By[i], Bz[i]])
 
-fig, ax = plt.subplots(figsize=(10, 5))
-ax.plot(lp_epochs[::downsample_factor], states[:, 3], label='vx from spacecraft', linestyle=':', color='tab:blue')
-ax.plot(lp_epochs[::downsample_factor], states[:, 4], label='vy from spacecraft', linestyle=':', color='tab:orange')
-ax.plot(lp_epochs[::downsample_factor], -corotation_v[:, 0], label='vx from corotation', linestyle='--', color='tab:blue')
-ax.plot(lp_epochs[::downsample_factor], -corotation_v[:, 1], label='vy from corotation', linestyle='--', color='tab:orange')
-ax.plot(lp_epochs[::downsample_factor], plasma_rel_speed[:, 0], label='vx', color='tab:blue')
-ax.plot(lp_epochs[::downsample_factor], plasma_rel_speed[:, 1], label='vy', color='tab:orange')
-ax.plot(lp_epochs[::downsample_factor], plasma_rel_speed[:, 2], label='vz', color='tab:green')
-ax.set_xlabel('Epoch \n Distance (R$_E$)')
-ax.xaxis.set_label_coords(-0.06, -0.025)
-ticks = ax.get_xticks()
-ticks = convert_1970(ticks)
-distances = get_JUICE_distance(ticks)
-for tick, dist in zip(ticks, distances):
-    ax.annotate(f"{dist:.1f}", xy=(tick, ax.get_ylim()[0]), xycoords=('data', 'data'),
-                xytext=(0, -20), textcoords='offset points',
-                ha='center', va='top', fontsize=10, rotation=0)
-ax.set_ylabel('Velocity (km/s)')
-ax.set_title('JUICE Spacecraft Velocity Components in GSM frame')
-ax.legend(loc = 'upper left')
-ax.grid()
+# Write data to a txt file with relevant info in the filename
+output_filename = f"vxB_downsample{downsample_factor}.txt"
 
-fig, ax = plt.subplots(figsize=(10, 5))
-ax.plot(lp_epochs[::downsample_factor], v_x_B[:, 0]*1e-3, label='-vxB_x')
-ax.plot(lp_epochs[::downsample_factor], v_x_B[:, 1]*1e-3, label='-vxB_y')
-ax.plot(lp_epochs[::downsample_factor], v_x_B[:, 2]*1e-3, label='-vxB_z')
-ax.set_xlabel('Epoch \n Distance (R$_E$)')
-ax.xaxis.set_label_coords(-0.06, -0.025)
-ticks = ax.get_xticks()
-ticks = convert_1970(ticks)
-distances = get_JUICE_distance(ticks)
-for tick, dist in zip(ticks, distances):
-    ax.annotate(f"{dist:.1f}", xy=(tick, ax.get_ylim()[0]), xycoords=('data', 'data'),
-                xytext=(0, -20), textcoords='offset points',
-                ha='center', va='top', fontsize=10, rotation=0)
-ax.set_ylabel('Electric Field (mV/m)')
-ax.set_title('Electric Field from -v x B at JUICE in GSM frame')
-ax.legend()
-ax.grid()
+print(f"Writing vxB data to {output_filename}")
 
-for i in range(len(lp_epochs[::downsample_factor])):
-    et = spice.str2et(lp_epochs[::downsample_factor][i].isoformat())
-    v_x_B[i] = np.dot(spice.pxform('GSM', 'JUICE_SPACECRAFT', et), v_x_B[i])
+header = (
+    "Epoch\t"
+    "Bx\tBy\tBz\t"
+    "vxSC\tvySC\tvzSC\t"
+    "vxCorot\tvyCorot\t"
+    "EvxBx\tEvxBy\tEvxBz\n"
+)
 
-fig, ax = plt.subplots(figsize=(10, 5))
-ax.plot(lp_epochs[::downsample_factor], v_x_B[:, 0]*1e-3, label='-vxB_x')
-ax.plot(lp_epochs[::downsample_factor], v_x_B[:, 1]*1e-3, label='-vxB_y')
-ax.plot(lp_epochs[::downsample_factor], v_x_B[:, 2]*1e-3, label='-vxB_z')
-ax.set_xlabel('Epoch \n Distance (R$_E$)')
-ax.xaxis.set_label_coords(-0.06, -0.025)
-ticks = ax.get_xticks()
-ticks = convert_1970(ticks)
-distances = get_JUICE_distance(ticks)
-for tick, dist in zip(ticks, distances):
-    ax.annotate(f"{dist:.1f}", xy=(tick, ax.get_ylim()[0]), xycoords=('data', 'data'),
-                xytext=(0, -20), textcoords='offset points',
-                ha='center', va='top', fontsize=10, rotation=0)
-ax.set_ylabel('Electric Field (mV/m)')
-ax.set_title('Electric Field from -v x B at JUICE in JUICE spacecraft frame')
-ax.legend()
-ax.grid()
+# Set output directory (change this as needed)
+output_dir = "Olivier_RPWI/Plasmasphere_data_files/vxB/"
+output_path = output_dir + output_filename
 
+with open(output_path, "w") as f:
+    f.write(header)
+    for i in range(len(lp_epochs[::downsample_factor])):
+        line = (
+            f"{lp_epochs[::downsample_factor][i]}"
+            f"\t{Bx[i]:.6f}\t{By[i]:.6f}\t{Bz[i]:.6f}"
+            f"\t{states[i,3]:.6f}\t{states[i,4]:.6f}\t{states[i,5]:.6f}"
+            f"\t{-corotation_v[i,0]:.6f}\t{-corotation_v[i,1]:.6f}"
+            f"\t{v_x_B[i,0]*1e-3:.6f}\t{v_x_B[i,1]*1e-3:.6f}\t{v_x_B[i,2]*1e-3:.6f}\n"
+        )
+        f.write(line)
+
+print("Wrote into data file")
+
+print("Finished")
 print(f"Running time: {dt.datetime.now() - start}")
 
 spice.kclear()

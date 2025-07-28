@@ -1,3 +1,5 @@
+# Getting distance from THEMIS probes to JUICE spacecraft during the plasmasphere crossing on 20 August 2024
+
 import cdflib
 import numpy as np
 import datetime as dt
@@ -43,7 +45,7 @@ for i, epoch in enumerate(lp_epochs[::downsample_factor]):
     state, _ = spice.spkezr('JUICE', et, 'GSM', 'NONE', 'EARTH')
     states[i] = state
 
-# Look at JUICE position
+# JUICE positions
 x = states[:, 0]
 y = states[:, 1]
 z = states[:, 2]
